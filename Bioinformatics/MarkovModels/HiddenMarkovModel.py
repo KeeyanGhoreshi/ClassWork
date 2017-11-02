@@ -1,6 +1,8 @@
 import numpy as np
 import time
 
+
+
 def stopwatch(routine):
     def wrapper(*args,**kwargs):
         start = time.time()
@@ -30,12 +32,14 @@ class HiddenMarkovModel():
             emission = current_state.emit(include_state=True)
             self.simulation.append(emission)
             current_state = current_state.transition()
+        return self.simulation
     def construct_matrix(self):
         observations = [x[0] for x in self.simulation]
         k = len(self.states)
         L = len(observations)
         # f[state, location]
-        dynamic_matrix = np.zeros([k, L])
+        dynamic_matrix = np.zeros([k, L], dtype=np.float128)
+
         return dynamic_matrix, observations, k, L
     @stopwatch
     def forward(self, begin_state):
@@ -48,6 +52,8 @@ class HiddenMarkovModel():
             print("No simulation was run")
             return 0
         f,observations,k,L = self.construct_matrix()
+        scale_factors = np.zeros(L, dtype=np.float64)
+        scale_factors[0] = 1
         for state in range(k):
             if state == begin_state:
                 f[state, 0] = 1
@@ -61,9 +67,12 @@ class HiddenMarkovModel():
                 emission_prob = self.states[state].emission_dict[observation]
                 summation = summation*emission_prob
                 f[state, i] = summation
-        return f
+            scale_factors[i] = 1./np.sum(f[:,i])
+            f[:,i] = f[:,i]/np.sum(f[:,i])
+
+        return f, scale_factors
     @stopwatch
-    def backward(self):
+    def backward(self, scale_factors):
         """
         Computes probability of emitting the remaining sequence after being at some hidden state k at time t
 
@@ -78,13 +87,14 @@ class HiddenMarkovModel():
         for state in range(k):
             # Given that the sequence is terminated based on length rather than probability, the model is
             # guaranteed to transition to end state on the Lth observation
-            b[state,L-1] = 1
+            b[state,L-1] = scale_factors[L-1]
         # Recurrence
         for state in range(k):
             for observation in range(L-1)[::-1]:
-                                # b_l(i+1) * a_kl * e_l(x_i+1)
+                # b_l(i+1) * a_kl * e_l(x_i+1)
                 summation = sum([b[l,observation+1] * self.states[l].transition_dict[self.states[state]] * self.states[l].emission_dict[observations[observation+1]] for l in range(k)])
-                b[state,observation] = summation
+                b[state,observation] = summation*scale_factors[observation]
+
         # Given some known start state, b[k,0] will give the probability of the full sequence
         return b
     @stopwatch
@@ -104,12 +114,13 @@ class HiddenMarkovModel():
         for observation in range(1,L):
             for state in range(k):
                 e_lxi = self.states[state].emission_dict[observations[observation]]
-                possibilities = [self.states[k2].transition_dict[self.states[state]] * V[k2, observation-1] for k2 in range(k)]
-                max_k = max(possibilities)
+                possibilities = [np.multiply(np.multiply(self.states[k2].transition_dict[self.states[state]], V[k2, observation-1]),e_lxi) for k2 in range(k)]
+                max_k = np.max(possibilities)
                 # Argmax of a_kl * V_k(i-1)
                 backpointer = np.argmax(possibilities)
-                V[state,observation] = e_lxi*max_k
+                V[state,observation] = max_k
                 V2[state,observation] = backpointer
+            V[:,observation] = V[:,observation]/np.sum(V[:,observation])
         z = np.zeros(L, dtype=int)
         x = np.empty(L,dtype=object)
         # Find traceback to display most likely path
@@ -132,14 +143,17 @@ class HiddenMarkovModel():
         return z,number_correct/len(x)
     @stopwatch
     def posterior(self):
-        f = self.forward(0)
-        b = self.backward()
+        f, scale_factors = self.forward(0)
+        b = self.backward(scale_factors)
         p, observations, k, L = self.construct_matrix()
         for i in range(k):
             for j in range(L):
                 p[i,j] = (f[i,j]*b[i,j])/(f[1,L-1]+f[0,L-1])
         counter = 0
+
+        p = p/np.transpose(scale_factors)
         p = np.transpose(p)
+        #Henlo
         m = np.argmax(p,1)
         for i in range(len(self.simulation)):
             if m[i] == self.states.index(self.state_by_name[self.simulation[i][1]]):
@@ -234,7 +248,8 @@ Fair.set_transition(Loaded, .05)
 Loaded.set_transition(Loaded, .9)
 Loaded.set_transition(Fair,.1)
 HMM = HiddenMarkovModel([Fair,Loaded])
-HMM.simulate(max_iteration=300)
+sim = HMM.simulate(max_iteration=3000)
+
 #print(HMM.forward(0))
 #print(HMM.backward())
 HMM.Viterbi(0)
