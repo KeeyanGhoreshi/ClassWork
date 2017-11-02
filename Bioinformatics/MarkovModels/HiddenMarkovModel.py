@@ -1,13 +1,30 @@
 import numpy as np
+import time
 
-
+def stopwatch(routine):
+    def wrapper(*args,**kwargs):
+        start = time.time()
+        p = routine(*args,**kwargs)
+        end = time.time()
+        print(routine.__name__ + " took " + str(round((end-start),4)) + " seconds")
+        return p
+    return wrapper
 
 class HiddenMarkovModel():
     def __init__(self, states, end_state = "$"):
         self.states = states
         self.end_state = end_state
         self.simulation = []
-    def simulate(self, max_iteration=100):
+        self.state_by_name = {}
+        self.transition_matrix = np.zeros([len(self.states),len(self.states)])
+        for i in range(len(self.states)):
+            state = states[i]
+            for j in range(len(state.transition_dict)):
+                self.transition_matrix[i,j] = state.transition_dict[states[j]]
+            self.state_by_name[state.name] = state
+
+    def simulate(self, max_iteration=1000):
+        self.simulation = []
         current_state = self.states[0]
         for i in range(max_iteration):
             emission = current_state.emit(include_state=True)
@@ -20,6 +37,7 @@ class HiddenMarkovModel():
         # f[state, location]
         dynamic_matrix = np.zeros([k, L])
         return dynamic_matrix, observations, k, L
+    @stopwatch
     def forward(self, begin_state):
         """
         Does the forward algorithm on the simulation data
@@ -44,6 +62,7 @@ class HiddenMarkovModel():
                 summation = summation*emission_prob
                 f[state, i] = summation
         return f
+    @stopwatch
     def backward(self):
         """
         Computes probability of emitting the remaining sequence after being at some hidden state k at time t
@@ -68,6 +87,7 @@ class HiddenMarkovModel():
                 b[state,observation] = summation
         # Given some known start state, b[k,0] will give the probability of the full sequence
         return b
+    @stopwatch
     def Viterbi(self, start_state, display = False):
         """
         Uses Viterbi Decoding to find most likely path given some observations
@@ -100,10 +120,74 @@ class HiddenMarkovModel():
         for i in range(1,L)[::-1]:
             z[i-1] = V2[z[i],i]
             x[i-1] = self.states[z[i-1]].name
-        if display:
-            for i in range(len(x)):
-                print(self.simulation[i] + [x[i]])
-        return(z)
+        number_correct = 0
+        for i in range(len(x)):
+
+            if(self.simulation[i][1] == x[i]):
+                number_correct+=1
+            if(display):
+                print("[" + str(i) + "]   " + str(self.simulation[i]) + str([x[i]]))
+        print('')
+        print("--> Viterbi Accuracy: " + str(number_correct/len(x)))
+        return z,number_correct/len(x)
+    @stopwatch
+    def posterior(self):
+        f = self.forward(0)
+        b = self.backward()
+        p, observations, k, L = self.construct_matrix()
+        for i in range(k):
+            for j in range(L):
+                p[i,j] = (f[i,j]*b[i,j])/(f[1,L-1]+f[0,L-1])
+        counter = 0
+        p = np.transpose(p)
+        m = np.argmax(p,1)
+        for i in range(len(self.simulation)):
+            if m[i] == self.states.index(self.state_by_name[self.simulation[i][1]]):
+                counter+=1
+        accuracy = counter/len(self.simulation)
+        print('')
+        print("--> Posterior Accuracy: " + str(accuracy))
+        return(p, accuracy)
+    @stopwatch
+    def MLE(self, display = False):
+        # Parameter Estimation
+        state_matrix = np.zeros([len(self.states),len(self.states)])
+        emit_list = []
+        state_probability = state_matrix.copy()
+        for state in self.states:
+            emit_list.append({})
+        for i in range(len(self.simulation)-1):
+            data = self.simulation[i]
+            next_point = self.simulation[i+1]
+            current_state = self.states.index(self.state_by_name[data[1]])
+            next_state = self.states.index(self.state_by_name[next_point[1]])
+            state_matrix[current_state,next_state] += 1
+            current_emit = data[0]
+            try:
+                emit_list[current_state][current_emit] += 1
+            except KeyError:
+                emit_list[current_state][current_emit] = 1
+        if(display):
+            print(state_matrix)
+        # Pseudocount, avoids errors with small simluation lengths
+        state_matrix = state_matrix+1
+        for k in range(len(self.states)):
+            for l in range(len(self.states)):
+                summation = sum([state_matrix[k, i] for i in range(len(self.states))])
+                probability = state_matrix[k,l]/summation
+                state_probability[k,l] = probability
+                if(display):
+                    print(self.states[k].name + " --> " + self.states[l].name + ": " + str(probability))
+        if(display):
+            print(state_probability)
+        mse = np.sum((np.square(state_probability*100-self.transition_matrix*100)))/np.size(state_probability)
+        print('')
+        print("--> MLE Error: " + str(round(mse,8)))
+        return mse
+
+
+
+
 
 
 
@@ -153,4 +237,6 @@ HMM = HiddenMarkovModel([Fair,Loaded])
 HMM.simulate(max_iteration=300)
 #print(HMM.forward(0))
 #print(HMM.backward())
-print(HMM.Viterbi(0))
+HMM.Viterbi(0)
+HMM.posterior()
+HMM.MLE()
