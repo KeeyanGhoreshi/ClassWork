@@ -1,15 +1,18 @@
 import numpy as np
 import time
-
+import hidden_markov
 
 
 def stopwatch(routine):
+    """
+    Calculates and returns time it takes for a function to run
+    """
     def wrapper(*args,**kwargs):
         start = time.time()
         p = routine(*args,**kwargs)
         end = time.time()
-        print(routine.__name__ + " took " + str(round((end-start),4)) + " seconds")
-        return p
+        # print(routine.__name__ + " took " + str(round((end-start),4)) + " seconds")
+        return p, end-start
     return wrapper
 
 class HiddenMarkovModel():
@@ -34,6 +37,9 @@ class HiddenMarkovModel():
             current_state = current_state.transition()
         return self.simulation
     def construct_matrix(self):
+        """
+        Produces necessary variables for all dynamic programming algorithms
+        """
         observations = [x[0] for x in self.simulation]
         k = len(self.states)
         L = len(observations)
@@ -52,25 +58,29 @@ class HiddenMarkovModel():
             print("No simulation was run")
             return 0
         f,observations,k,L = self.construct_matrix()
-        scale_factors = np.zeros(L, dtype=np.float64)
-        scale_factors[0] = 1
+        # Main scale factor is hard coded for now but can be easily made dynamic
+        scale_factors = [6]
+
+        # Init
         for state in range(k):
             if state == begin_state:
                 f[state, 0] = 1
             else:
                 f[state, 0] = 0
+        # Recurrence
         for i in range(1, L):
             observation = observations[i]
-
             for state in range(k):
                 summation = sum([f[s2,i-1]*self.states[s2].transition_dict[self.states[state]] for s2 in range(k)])
                 emission_prob = self.states[state].emission_dict[observation]
                 summation = summation*emission_prob
                 f[state, i] = summation
-            scale_factors[i] = 1./np.sum(f[:,i])
+            # Scale results
+            scale_factors.append(1/np.sum(f[:,i]))
             f[:,i] = f[:,i]/np.sum(f[:,i])
-
         return f, scale_factors
+
+
     @stopwatch
     def backward(self, scale_factors):
         """
@@ -84,16 +94,22 @@ class HiddenMarkovModel():
             print("No simulation was run")
             return 0
         b, observations, k, L = self.construct_matrix()
+
+        # Init
         for state in range(k):
             # Given that the sequence is terminated based on length rather than probability, the model is
             # guaranteed to transition to end state on the Lth observation
             b[state,L-1] = scale_factors[L-1]
+
         # Recurrence
-        for state in range(k):
-            for observation in range(L-1)[::-1]:
+        for observation in range(L-1)[::-1]:
+            for state in range(k):
                 # b_l(i+1) * a_kl * e_l(x_i+1)
-                summation = sum([b[l,observation+1] * self.states[l].transition_dict[self.states[state]] * self.states[l].emission_dict[observations[observation+1]] for l in range(k)])
+                summation = np.sum([b[l,observation+1] * self.states[l].transition_dict[self.states[state]] * self.states[l].emission_dict[observations[observation+1]] for l in range(k)])
+
+                # Scale data based on scale factors from forward algorithm
                 b[state,observation] = summation*scale_factors[observation]
+
 
         # Given some known start state, b[k,0] will give the probability of the full sequence
         return b
@@ -102,6 +118,8 @@ class HiddenMarkovModel():
         """
         Uses Viterbi Decoding to find most likely path given some observations
         """
+
+
         if len(self.simulation)==0:
             print("No simulation was run")
             return 0
@@ -110,17 +128,24 @@ class HiddenMarkovModel():
 
         # Matrix is initialized to zero by default
         V[start_state,0] = 1*self.states[start_state].emission_dict[observations[0]]
+
         #V[start_state, 0] = 1
+
         for observation in range(1,L):
             for state in range(k):
+
                 e_lxi = self.states[state].emission_dict[observations[observation]]
                 possibilities = [np.multiply(np.multiply(self.states[k2].transition_dict[self.states[state]], V[k2, observation-1]),e_lxi) for k2 in range(k)]
+
                 max_k = np.max(possibilities)
+
                 # Argmax of a_kl * V_k(i-1)
                 backpointer = np.argmax(possibilities)
                 V[state,observation] = max_k
                 V2[state,observation] = backpointer
+
             V[:,observation] = V[:,observation]/np.sum(V[:,observation])
+
         z = np.zeros(L, dtype=int)
         x = np.empty(L,dtype=object)
         # Find traceback to display most likely path
@@ -138,20 +163,21 @@ class HiddenMarkovModel():
                 number_correct+=1
             if(display):
                 print("[" + str(i) + "]   " + str(self.simulation[i]) + str([x[i]]))
-        print('')
-        print("--> Viterbi Accuracy: " + str(number_correct/len(x)))
-        return z,number_correct/len(x)
-    @stopwatch
-    def posterior(self):
-        f, scale_factors = self.forward(0)
-        b = self.backward(scale_factors)
-        p, observations, k, L = self.construct_matrix()
-        for i in range(k):
-            for j in range(L):
-                p[i,j] = (f[i,j]*b[i,j])/(f[1,L-1]+f[0,L-1])
-        counter = 0
+        if(display):
+            print('')
+            print("--> Viterbi Accuracy: " + str(number_correct/len(x)))
 
-        p = p/np.transpose(scale_factors)
+        return number_correct/len(x)
+    @stopwatch
+    def posterior(self, display = False):
+
+        results, duration = self.forward(0)
+        f = results[0]
+        scale_factors = results[1]
+        b, duration = self.backward(scale_factors)
+        p, observations, k, L = self.construct_matrix()
+        p = np.multiply(f,b)/np.sum(f[:,L-1])
+        counter = 0
         p = np.transpose(p)
         #Henlo
         m = np.argmax(p,1)
@@ -159,9 +185,10 @@ class HiddenMarkovModel():
             if m[i] == self.states.index(self.state_by_name[self.simulation[i][1]]):
                 counter+=1
         accuracy = counter/len(self.simulation)
-        print('')
-        print("--> Posterior Accuracy: " + str(accuracy))
-        return(p, accuracy)
+        if(display):
+            print('')
+            print("--> Posterior Accuracy: " + str(accuracy))
+        return accuracy
     @stopwatch
     def MLE(self, display = False):
         # Parameter Estimation
@@ -192,11 +219,11 @@ class HiddenMarkovModel():
                 state_probability[k,l] = probability
                 if(display):
                     print(self.states[k].name + " --> " + self.states[l].name + ": " + str(probability))
+        mse = np.sum((np.square(state_probability * 100 - self.transition_matrix * 100))) / np.size(state_probability)
         if(display):
             print(state_probability)
-        mse = np.sum((np.square(state_probability*100-self.transition_matrix*100)))/np.size(state_probability)
-        print('')
-        print("--> MLE Error: " + str(round(mse,8)))
+            print('')
+            print("--> MLE Error: " + str(round(mse,8)))
         return mse
 
 
@@ -248,10 +275,34 @@ Fair.set_transition(Loaded, .05)
 Loaded.set_transition(Loaded, .9)
 Loaded.set_transition(Fair,.1)
 HMM = HiddenMarkovModel([Fair,Loaded])
-sim = HMM.simulate(max_iteration=3000)
 
-#print(HMM.forward(0))
-#print(HMM.backward())
-HMM.Viterbi(0)
-HMM.posterior()
-HMM.MLE()
+
+sim_lengths = [300]
+number_of_iterations = 5
+with open('/home/keeyan/PycharmProjects/ClassWork/Bioinformatics/MarkovModels/results.txt','w') as file:
+    for iterations in sim_lengths:
+        V_acc = []
+        V_time = []
+        P_acc = []
+        P_time = []
+        MLE_acc = []
+        MLE_time = []
+        for i in range(number_of_iterations):
+            sim = HMM.simulate(max_iteration=iterations)
+            V_accuracy, V_duration = HMM.Viterbi(0)
+            V_acc.append(V_accuracy)
+            V_time.append(V_duration)
+            P_accuracy, P_duration = HMM.posterior()
+            P_acc.append(P_accuracy)
+            P_time.append(P_duration)
+            a,b = HMM.MLE()
+            MLE_acc.append(a)
+            MLE_time.append(b)
+
+
+        file.write("--- " + str(iterations) + " data points --- (" + str(number_of_iterations) + " simulations) ---\n")
+        file.write("Name       [Avg Accuracy] [Average Time]\n")
+        file.write("Viterbi:      [" + str(round(np.average(V_acc),3)) + "]        [" + str(round(np.average(V_time),4)) + "]\n")
+        file.write("Posterior:    [" + str(round(np.average(P_acc), 3)) + "]        [" + str(round(np.average(P_time), 4)) + "]\n")
+        file.write("MLE:          [" + str(round(np.average(MLE_acc), 3)) + "]        [" + str(round(np.average(MLE_time), 4)) + "]\n")
+
