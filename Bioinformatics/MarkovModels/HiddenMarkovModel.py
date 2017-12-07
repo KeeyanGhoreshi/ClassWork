@@ -179,7 +179,7 @@ class HiddenMarkovModel():
         p = np.multiply(f,b)/np.sum(f[:,L-1])
         counter = 0
         p = np.transpose(p)
-        #Henlo
+        #Hello
         m = np.argmax(p,1)
         for i in range(len(self.simulation)):
             if m[i] == self.states.index(self.state_by_name[self.simulation[i][1]]):
@@ -193,10 +193,10 @@ class HiddenMarkovModel():
     def MLE(self, display = False):
         # Parameter Estimation
         state_matrix = np.zeros([len(self.states),len(self.states)])
-        emit_list = []
+        emit_list = np.zeros([len(self.states),max(len(b.emission_dict) for b in self.states)])
         state_probability = state_matrix.copy()
-        for state in self.states:
-            emit_list.append({})
+
+        # Collect number of specific transitions and emissions by going through each observation
         for i in range(len(self.simulation)-1):
             data = self.simulation[i]
             next_point = self.simulation[i+1]
@@ -204,13 +204,29 @@ class HiddenMarkovModel():
             next_state = self.states.index(self.state_by_name[next_point[1]])
             state_matrix[current_state,next_state] += 1
             current_emit = data[0]
-            try:
-                emit_list[current_state][current_emit] += 1
-            except KeyError:
-                emit_list[current_state][current_emit] = 1
+            emit_list[current_state][current_emit-1] += 1
+        x=np.empty(len(emit_list[0,:]))
+
+        # Create a matrix of emission probabilities
+        for dictionary in emit_list:
+            total = sum(dictionary)
+            for thing in range(len(dictionary)):
+                dictionary[thing] = dictionary[thing]/total
+            x= np.vstack([x,list(dictionary)])
+        x =x[1:,:]
+        emit_matrix = x.copy()
+        # Get true value of emission from each state
+        for state in range(len(self.states)):
+            for emission in range(len(emit_matrix[0,:])):
+                # Not suitable for emissions that don't have a numerical key equal to their value
+                emit_matrix[state,emission] = self.states[state].emission_dict[emission+1]
         if(display):
-            print(state_matrix)
-        # Pseudocount, avoids errors with small simluation lengths
+            #print(state_matrix)
+            print("\n Emission MLE")
+            print("Fair ----> " + str(x[0,:].round(3)))
+            print("Loaded ---->" +str(x[1,:].round(3)))
+            print("\n State MLE")
+        # Pseudocount, avoids errors with small simulation lengths
         state_matrix = state_matrix+1
         for k in range(len(self.states)):
             for l in range(len(self.states)):
@@ -219,12 +235,15 @@ class HiddenMarkovModel():
                 state_probability[k,l] = probability
                 if(display):
                     print(self.states[k].name + " --> " + self.states[l].name + ": " + str(probability))
+        # Difference between estimated and true transition probabilities
+        mse_emit = np.sum((np.square(x*100 - emit_matrix*100)))/np.size(x)
         mse = np.sum((np.square(state_probability * 100 - self.transition_matrix * 100))) / np.size(state_probability)
         if(display):
-            print(state_probability)
+            #print(state_probability)
+
             print('')
-            print("--> MLE Error: " + str(round(mse,8)))
-        return mse
+            print("--> MLE Error: " + str(round(mse,8)) + '\n')
+        return mse, mse_emit
 
 
 
@@ -236,6 +255,9 @@ class HiddenMarkovModel():
 
 
 class State():
+    """
+    State class handles emission and transition for the simulation
+    """
     def __init__(self, emission_dict, transition_dict=None, name="None"):
         self.emission_dict = emission_dict
         self.name = name
@@ -265,7 +287,7 @@ class State():
     def set_emission(self, emission, probability):
         self.emission_dict[emission] = probability
 
-
+# Model Definition
 emission_fair = {1: 1/6, 2: 1/6, 3: 1/6, 4: 1/6, 5: 1/6, 6: 1/6}
 emission_loaded = {1: .1, 2: .1, 3: .1, 4: .1, 5: .1, 6: .5}
 Fair = State(emission_dict=emission_fair, name="Fair")
@@ -277,16 +299,22 @@ Loaded.set_transition(Fair,.1)
 HMM = HiddenMarkovModel([Fair,Loaded])
 
 
-sim_lengths = [300]
-number_of_iterations = 5
-with open('/home/keeyan/PycharmProjects/ClassWork/Bioinformatics/MarkovModels/results.txt','w') as file:
-    for iterations in sim_lengths:
+sim_lengths = [300,3000,30000, 300000]
+number_of_iteration = [1,1,1,1]
+
+# Output
+with open('results.txt','w') as file:
+    for iteration in range(len(sim_lengths)):
+        iterations = sim_lengths[iteration]
         V_acc = []
         V_time = []
         P_acc = []
         P_time = []
         MLE_acc = []
+        MLE_emit_acc = []
         MLE_time = []
+        number_of_iterations = number_of_iteration[iteration]
+        print(str(sim_lengths[iteration]) + " data points")
         for i in range(number_of_iterations):
             sim = HMM.simulate(max_iteration=iterations)
             V_accuracy, V_duration = HMM.Viterbi(0)
@@ -295,14 +323,15 @@ with open('/home/keeyan/PycharmProjects/ClassWork/Bioinformatics/MarkovModels/re
             P_accuracy, P_duration = HMM.posterior()
             P_acc.append(P_accuracy)
             P_time.append(P_duration)
-            a,b = HMM.MLE()
-            MLE_acc.append(a)
+            a,b = HMM.MLE(display=True)
+            MLE_acc.append(a[0])
+            MLE_emit_acc.append(a[1])
             MLE_time.append(b)
 
-
         file.write("--- " + str(iterations) + " data points --- (" + str(number_of_iterations) + " simulations) ---\n")
-        file.write("Name       [Avg Accuracy] [Average Time]\n")
-        file.write("Viterbi:      [" + str(round(np.average(V_acc),3)) + "]        [" + str(round(np.average(V_time),4)) + "]\n")
-        file.write("Posterior:    [" + str(round(np.average(P_acc), 3)) + "]        [" + str(round(np.average(P_time), 4)) + "]\n")
-        file.write("MLE:          [" + str(round(np.average(MLE_acc), 3)) + "]        [" + str(round(np.average(MLE_time), 4)) + "]\n")
+        file.write("Name       [Avg Accuracy] [Average Time] [Std Deviation]\n")
+        file.write("Viterbi:      [" + str(round(np.average(V_acc),3)) + "]        [" + str(round(np.average(V_time),4)) + "]       [" + str(round(np.std(V_acc),4))+ "]\n")
+        file.write("Posterior:    [" + str(round(np.average(P_acc), 3)) + "]        [" + str(round(np.average(P_time), 4)) + "]       [" + str(round(np.std(P_acc),4))+ "]\n")
+        file.write("MLE:   (Trans)[" + str(round(np.average(MLE_acc), 3)) + "]        [" + str(round(np.average(MLE_time), 4)) + "]       [" + str(round(np.std(MLE_acc),4))+ "]\n")
+        file.write("        (Emit)[" + str(round(np.average(MLE_emit_acc),3)) + "]\n\n")
 

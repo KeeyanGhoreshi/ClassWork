@@ -23,6 +23,7 @@ def coin_change(coin_list,value):
                 C[di,w] = C[di-1, w]
     # A return value of 0 indicates that change cannot be made for the value given the coins
     # Return corner, C[k,n]
+    print(C)
     return min(C[1:, value])
 
 
@@ -58,4 +59,4 @@ def job_stress(high_list, low_list):
 
 
 
-
+print(coin_change([1,10,25],30))
